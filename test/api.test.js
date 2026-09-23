@@ -599,6 +599,61 @@ function jsonRequest(server, urlPath, payload) {
     assert.strictEqual(badJson.status, 400);
     assert.match(JSON.parse(badJson.body.toString()).error, /JSON/);
 
+    // ---------- 印张定位标记 /api/impose?registrationMarks=on ----------
+    // 5 页 A4：启用后输出页 = (2×595.28+2×8mm) × (841.89+2×8mm)，方案记录实际印张宽高
+    const MM8_PT = 8 * (72 / 25.4);
+    const marksBody = multipartBody({
+      text: { registrationMarks: 'on' },
+      files: [{ field: 'pdf', filename: 'sample.pdf', contentType: 'application/pdf', data: pdfBytes }],
+    }, boundary);
+    const marksResp = await request(server, 'POST', '/api/impose', {
+      body: marksBody,
+      headers: {
+        'Content-Type': `multipart/form-data; boundary=${boundary}`,
+        'Content-Length': marksBody.length,
+      },
+    });
+    assert.strictEqual(marksResp.status, 200);
+    assert.ok(marksResp.headers['content-type'].includes('application/pdf'));
+    const marksPlan = JSON.parse(decodeURIComponent(marksResp.headers['x-imposition-plan']));
+    assert.strictEqual(marksPlan.marks.enabled, true);
+    assert.strictEqual(marksPlan.marks.marginMm, 8);
+    assert.ok(Math.abs(marksPlan.sheet.width - (595.28 * 2 + 2 * MM8_PT)) < 0.01);
+    assert.ok(Math.abs(marksPlan.sheet.height - (841.89 + 2 * MM8_PT)) < 0.01);
+    const markedPdf = await PDFDocument.load(marksResp.body);
+    assert.strictEqual(markedPdf.getPageCount(), 4); // 页数/页序与未启用一致
+    assert.ok(Math.abs(markedPdf.getPage(0).getWidth() - (595.28 * 2 + 2 * MM8_PT)) < 0.5);
+    assert.ok(Math.abs(markedPdf.getPage(0).getHeight() - (841.89 + 2 * MM8_PT)) < 0.5);
+
+    // 未勾选（前面上文 imposeResp）：方案记录原印张尺寸，标记为未启用
+    const plainImposePlan = JSON.parse(decodeURIComponent(imposeResp.headers['x-imposition-plan']));
+    assert.strictEqual(plainImposePlan.marks.enabled, false);
+    assert.ok(Math.abs(plainImposePlan.sheet.width - 595.28 * 2) < 0.01);
+    assert.ok(Math.abs(plainImposePlan.sheet.height - 841.89) < 0.01);
+
+    // 报价按实际印张宽高：启用标记后印张 436×313mm，A3（420×297）两个方向均放不下
+    const marksQuoteResp = await jsonRequest(server, '/api/quote', {
+      plan: marksPlan,
+      papers: [{ name: 'A3', widthMm: 420, heightMm: 297, pricePerSheet: 1, setupFee: 50 }],
+    });
+    assert.strictEqual(marksQuoteResp.status, 200);
+    const marksQuote = JSON.parse(marksQuoteResp.body.toString());
+    assert.strictEqual(marksQuote.feasible, false);
+    assert.strictEqual(marksQuote.reasonCode, 'no_fitting_paper');
+    assert.ok(Math.abs(marksQuote.layout.sheet.widthMm - (2 * 210 + 16)) < 0.05);
+    assert.ok(Math.abs(marksQuote.layout.sheet.heightMm - (297 + 16)) < 0.05);
+
+    // 同一文件未勾选时报价结果保持原样：A3 恰好容纳 420×297 印张
+    const plainQuoteResp = await jsonRequest(server, '/api/quote', {
+      plan: plainImposePlan,
+      papers: [{ name: 'A3', widthMm: 420, heightMm: 297, pricePerSheet: 1, setupFee: 50 }],
+    });
+    assert.strictEqual(plainQuoteResp.status, 200);
+    const plainQuote = JSON.parse(plainQuoteResp.body.toString());
+    assert.strictEqual(plainQuote.feasible, true);
+    assert.ok(Math.abs(plainQuote.layout.sheet.widthMm - 420) < 0.05);
+    assert.ok(Math.abs(plainQuote.layout.sheet.heightMm - 297) < 0.05);
+
     console.log('✅ HTTP 集成测试通过：preflight 200 返回 JSON（含错误不阻断），缺文件 400，');
     console.log('   非 PDF 400，损坏文件 422；同一份带错误报告的 PDF 仍可成功 /api/impose；');
     console.log('   批量校验 /api/preflight/batch：坏文件不阻断好文件、按代码汇总、缺文件/超 10 个 400、');

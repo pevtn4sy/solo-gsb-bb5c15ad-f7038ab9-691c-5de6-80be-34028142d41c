@@ -196,6 +196,12 @@ app.post('/api/impose', upload.single('pdf'), async (req, res) => {
       }
     }
 
+    // 印张定位标记：registrationMarks=on 时版心四周各加 8mm 空白，
+    // 正背两面四角绘制裁切线、中央折线上下端绘制定位线
+    if (req.body && req.body.registrationMarks === 'on') {
+      options.registrationMarks = true;
+    }
+
     const { pdfBytes, plan } = await imposePdf(req.file.buffer, options);
 
     // 页序方案为纯 ASCII JSON，放入自定义响应头供前端渲染预览

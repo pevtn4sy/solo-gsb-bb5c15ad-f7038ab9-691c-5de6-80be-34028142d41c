@@ -13,6 +13,7 @@ const downloadBtn = document.getElementById('download-btn');
 const signatureModeInput = document.getElementById('signature-mode');
 const maxSheetsField = document.getElementById('max-sheets-field');
 const maxSheetsInput = document.getElementById('max-sheets');
+const registrationMarksInput = document.getElementById('registration-marks');
 const summaryListEl = document.getElementById('summary-list');
 const signatureSummaryEl = document.getElementById('signature-summary');
 
@@ -354,6 +355,9 @@ imposeBtn.addEventListener('click', async () => {
     form.append('signatureMode', 'on');
     form.append('maxSheetsPerSignature', String(maxSheets));
   }
+  if (registrationMarksInput.checked) {
+    form.append('registrationMarks', 'on');
+  }
 
   try {
     const resp = await fetch('/api/impose', { method: 'POST', body: form });
@@ -432,6 +436,21 @@ function renderSummary(plan) {
     );
     appendSummaryItem('页面方向', ORIENTATION_LABELS[orientation] || orientation);
   }
+  if (plan.sheet) {
+    appendSummaryItem(
+      '印张尺寸',
+      `${plan.sheet.width.toFixed(1)} × ${plan.sheet.height.toFixed(1)} pt`
+        + `（约 ${ptToMm(plan.sheet.width)} × ${ptToMm(plan.sheet.height)} mm）`,
+    );
+  }
+  if (plan.marks) {
+    appendSummaryItem(
+      '定位标记',
+      plan.marks.enabled
+        ? `已启用（版心四周各 ${plan.marks.marginMm} mm 空白）`
+        : '未启用',
+    );
+  }
 
   if (plan.signatureMode) {
     renderSignatureSummary(plan);
@@ -501,10 +520,13 @@ function forEachSheet(plan, callbacks) {
 
 function renderPreview(plan) {
   const frag = document.createDocumentFragment();
-  // 预览按真实纸张比例渲染：宽 = 2 × 面板宽，高 = 面板高
-  const sheetRatio = plan.panel && plan.panel.height > 0
-    ? (2 * plan.panel.width) / plan.panel.height
-    : 2;
+  // 预览按真实纸张比例渲染：优先用方案记录的实际印张宽高（含定位标记边距），
+  // 缺省回退为 宽 = 2 × 面板宽，高 = 面板高
+  const sheetRatio = plan.sheet && plan.sheet.height > 0
+    ? plan.sheet.width / plan.sheet.height
+    : (plan.panel && plan.panel.height > 0
+      ? (2 * plan.panel.width) / plan.panel.height
+      : 2);
 
   forEachSheet(plan, {
     onSignature(sig) {

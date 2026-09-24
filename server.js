@@ -195,6 +195,10 @@ app.post('/api/impose', upload.single('pdf'), async (req, res) => {
         return res.status(400).json({ error: err.message });
       }
     }
+    // 印张定位标记：sheetMarks=on 时版心四周加 8 mm 空白并绘制裁切/折线定位线
+    if (req.body && req.body.sheetMarks === 'on') {
+      options.sheetMarks = true;
+    }
 
     const { pdfBytes, plan } = await imposePdf(req.file.buffer, options);
 

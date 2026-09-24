@@ -500,6 +500,60 @@ function jsonRequest(server, urlPath, payload) {
     // 5 页 -> 补 3 白 -> 8 面板 -> 2 张纸 -> 4 个输出页
     assert.strictEqual(imposedPdf.getPageCount(), 4);
 
+    // 勾选印张定位标记：方案含 sheetMarks/outputSheet，每页四周各加 8 mm 空白
+    const markedBody = multipartBody({
+      text: { sheetMarks: 'on' },
+      files: [{ field: 'pdf', filename: 'sample.pdf', contentType: 'application/pdf', data: pdfBytes }],
+    }, boundary);
+    const markedResp = await request(server, 'POST', '/api/impose', {
+      body: markedBody,
+      headers: { 'Content-Type': `multipart/form-data; boundary=${boundary}`, 'Content-Length': markedBody.length },
+    });
+    assert.strictEqual(markedResp.status, 200);
+    const markedPlan = JSON.parse(decodeURIComponent(markedResp.headers['x-imposition-plan']));
+    assert.strictEqual(markedPlan.sheetMarks.enabled, true);
+    assert.strictEqual(markedPlan.sheetMarks.marginMm, 8);
+    const marginPt = 8 * 72 / 25.4;
+    assert.ok(Math.abs(markedPlan.outputSheet.width - (595.28 * 2 + marginPt * 2)) < 0.5);
+    assert.ok(Math.abs(markedPlan.outputSheet.height - (841.89 + marginPt * 2)) < 0.5);
+    const markedPdf = await PDFDocument.load(markedResp.body);
+    assert.strictEqual(markedPdf.getPageCount(), 4, '标记不改变纸张数与页序');
+    for (let i = 0; i < 4; i += 1) {
+      assert.ok(Math.abs(markedPdf.getPage(i).getWidth() - markedPlan.outputSheet.width) < 0.5);
+      assert.ok(Math.abs(markedPdf.getPage(i).getHeight() - markedPlan.outputSheet.height) < 0.5);
+    }
+
+    // 标记 + 签帖可同时启用
+    const markedSigBody = multipartBody({
+      text: { sheetMarks: 'on', signatureMode: 'on', maxSheetsPerSignature: '2' },
+      files: [{ field: 'pdf', filename: 'sample.pdf', contentType: 'application/pdf', data: pdfBytes }],
+    }, boundary);
+    const markedSigResp = await request(server, 'POST', '/api/impose', {
+      body: markedSigBody,
+      headers: { 'Content-Type': `multipart/form-data; boundary=${boundary}`, 'Content-Length': markedSigBody.length },
+    });
+    assert.strictEqual(markedSigResp.status, 200);
+    const markedSigPlan = JSON.parse(decodeURIComponent(markedSigResp.headers['x-imposition-plan']));
+    assert.strictEqual(markedSigPlan.signatureMode, true);
+    assert.strictEqual(markedSigPlan.sheetMarks.enabled, true);
+
+    // 未勾选时方案不含标记字段（与旧版完全一致）
+    const plainPlan = JSON.parse(decodeURIComponent(imposeResp.headers['x-imposition-plan']));
+    assert.strictEqual(plainPlan.sheetMarks, undefined);
+    assert.strictEqual(plainPlan.outputSheet, undefined);
+
+    // 用标记方案直接报价：服务端按实际输出印张尺寸判定（A3 420×297 放不下 436×313）
+    const markedQuoteResp = await jsonRequest(server, '/api/quote', {
+      plan: markedPlan,
+      papers: [{ name: 'A3', widthMm: 420, heightMm: 297, pricePerSheet: 1, setupFee: 50 }],
+    });
+    assert.strictEqual(markedQuoteResp.status, 200);
+    const markedQuote = JSON.parse(markedQuoteResp.body.toString());
+    assert.strictEqual(markedQuote.feasible, false);
+    assert.strictEqual(markedQuote.layout.sheetMarks, true);
+    assert.ok(Math.abs(markedQuote.layout.sheet.widthMm - 436) < 0.05);
+    assert.ok(Math.abs(markedQuote.layout.sheet.heightMm - 313) < 0.05);
+
     // ---------- 印刷用纸报价 /api/quote ----------
     // 5 页 -> 补白到 8 -> 2 张纸；A4 竖版面展开 420 × 297 mm
     const panel = { width: 595.2756, height: 841.8898, orientation: 'portrait' };

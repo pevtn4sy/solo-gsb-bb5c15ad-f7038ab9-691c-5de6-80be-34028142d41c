@@ -13,6 +13,8 @@ const downloadBtn = document.getElementById('download-btn');
 const signatureModeInput = document.getElementById('signature-mode');
 const maxSheetsField = document.getElementById('max-sheets-field');
 const maxSheetsInput = document.getElementById('max-sheets');
+const sheetMarksInput = document.getElementById('sheet-marks-mode');
+const legendMarksEl = document.getElementById('legend-marks');
 const summaryListEl = document.getElementById('summary-list');
 const signatureSummaryEl = document.getElementById('signature-summary');
 
@@ -354,6 +356,9 @@ imposeBtn.addEventListener('click', async () => {
     form.append('signatureMode', 'on');
     form.append('maxSheetsPerSignature', String(maxSheets));
   }
+  if (sheetMarksInput.checked) {
+    form.append('sheetMarks', 'on');
+  }
 
   try {
     const resp = await fetch('/api/impose', { method: 'POST', body: form });
@@ -432,6 +437,19 @@ function renderSummary(plan) {
     );
     appendSummaryItem('页面方向', ORIENTATION_LABELS[orientation] || orientation);
   }
+  const marksEnabled = !!(plan.sheetMarks && plan.sheetMarks.enabled);
+  appendSummaryItem(
+    '印张定位标记',
+    marksEnabled ? `已开启（版心四周各加 ${plan.sheetMarks.marginMm} mm 空白）` : '未开启',
+  );
+  // 实际输出印张尺寸：开启定位标记时取方案记录的 outputSheet（含四周空白），
+  // 否则与旧版一致（2 × 面板宽 × 面板高）。
+  const outW = marksEnabled && plan.outputSheet ? plan.outputSheet.width : plan.panel.width * 2;
+  const outH = marksEnabled && plan.outputSheet ? plan.outputSheet.height : plan.panel.height;
+  appendSummaryItem(
+    '当前印张尺寸',
+    `${ptToMm(outW)} × ${ptToMm(outH)} mm（正反两面一致）`,
+  );
 
   if (plan.signatureMode) {
     renderSignatureSummary(plan);
@@ -501,9 +519,12 @@ function forEachSheet(plan, callbacks) {
 
 function renderPreview(plan) {
   const frag = document.createDocumentFragment();
-  // 预览按真实纸张比例渲染：宽 = 2 × 面板宽，高 = 面板高
+  const marksEnabled = !!(plan.sheetMarks && plan.sheetMarks.enabled);
+  legendMarksEl.hidden = !marksEnabled;
+  // 预览按真实印张比例渲染：开启定位标记时含四周空白，否则 = 2 × 面板宽 / 面板高
   const sheetRatio = plan.panel && plan.panel.height > 0
-    ? (2 * plan.panel.width) / plan.panel.height
+    ? ((marksEnabled && plan.outputSheet ? plan.outputSheet.width : 2 * plan.panel.width)
+      / (marksEnabled && plan.outputSheet ? plan.outputSheet.height : plan.panel.height))
     : 2;
 
   forEachSheet(plan, {
@@ -530,8 +551,8 @@ function renderPreview(plan) {
       }
       card.appendChild(title);
 
-      card.appendChild(buildSide('正面', sheet.front, false, sheetRatio));
-      card.appendChild(buildSide('背面', sheet.back, true, sheetRatio));
+      card.appendChild(buildSide('正面', sheet.front, false, sheetRatio, marksEnabled));
+      card.appendChild(buildSide('背面', sheet.back, true, sheetRatio, marksEnabled));
 
       frag.appendChild(card);
     },
@@ -540,7 +561,7 @@ function renderPreview(plan) {
   previewEl.hidden = false;
 }
 
-function buildSide(labelText, side, isBack, sheetRatio) {
+function buildSide(labelText, side, isBack, sheetRatio, marksEnabled) {
   const sideEl = document.createElement('div');
   sideEl.className = 'side';
 
@@ -550,8 +571,25 @@ function buildSide(labelText, side, isBack, sheetRatio) {
   sideEl.appendChild(label);
 
   const spread = document.createElement('div');
-  spread.className = 'spread';
+  spread.className = marksEnabled ? 'spread marked' : 'spread';
   spread.style.aspectRatio = String(sheetRatio);
+  if (marksEnabled) {
+    // 示意标记层：四角裁切线 + 中央折线上下端定位线（仅位于版心之外）
+    const marks = document.createElement('div');
+    marks.className = 'sheet-marks';
+    marks.setAttribute('aria-hidden', 'true');
+    for (const corner of ['tl', 'tr', 'bl', 'br']) {
+      const c = document.createElement('span');
+      c.className = `crop-corner ${corner}`;
+      marks.appendChild(c);
+    }
+    for (const end of ['top', 'bottom']) {
+      const f = document.createElement('span');
+      f.className = `fold-tick ${end}`;
+      marks.appendChild(f);
+    }
+    spread.appendChild(marks);
+  }
   spread.appendChild(buildPanel(side.left, 'left'));
   spread.appendChild(buildPanel(side.right, 'right'));
 
@@ -562,6 +600,7 @@ function buildSide(labelText, side, isBack, sheetRatio) {
 function buildPanel(slot, position) {
   const panel = document.createElement('div');
   panel.className = slot.blank ? 'panel blank' : 'panel';
+  panel.classList.add(position);
 
   const pos = document.createElement('span');
   pos.className = `pos ${position}`;
@@ -1249,7 +1288,9 @@ function renderQuoteResult() {
   const layoutLine = document.createElement('p');
   layoutLine.className = 'quote-layout';
   layoutLine.textContent = `单张印张展开尺寸 ${fmtMm(layout.sheet.widthMm)} × ${fmtMm(layout.sheet.heightMm)}`
-    + `（统一面板 ${fmtMm(layout.panel.widthMm)} × ${fmtMm(layout.panel.heightMm)}）`
+    + `（统一面板 ${fmtMm(layout.panel.widthMm)} × ${fmtMm(layout.panel.heightMm)}`
+    + (layout.sheetMarks ? `，含四周各 ${layout.markMarginMm} mm 定位标记空白` : '')
+    + '）'
     + `；共 ${layout.sheetCount} 张纸，开机 ${layout.runCount} 次`
     + (layout.signatureMode ? `（${layout.signatureCount} 帖，每帖各 1 次）` : '');
   quoteResultEl.appendChild(layoutLine);

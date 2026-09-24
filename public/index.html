@@ -31,6 +31,13 @@
           <input type="number" id="max-sheets" min="1" max="20" step="1" value="4" />
           <span class="option-hint">1～20 张（每纸 4 页，即每帖 4～80 页；仅在每帖末尾补白）</span>
         </label>
+        <label class="option-check">
+          <input type="checkbox" id="sheet-marks-mode" />
+          <span>增加印张定位标记（版心四周各加 8 mm 空白，四角裁切线 + 中央折线上下端定位线）</span>
+        </label>
+        <p class="option-hint" id="sheet-marks-hint">
+          勾选后源页仍按原尺寸与页序放置，仅在版心之外绘制标记；实际输出印张尺寸会在拼版摘要中显示，用纸报价按该尺寸判定容纳与利用率。整册与分册签帖均适用。
+        </p>
       </div>
 
       <div class="btn-row">
@@ -278,6 +285,7 @@
       <div class="legend">
         <span class="legend-item"><span class="dot page"></span>原始页</span>
         <span class="legend-item"><span class="dot blank"></span>补的空白页</span>
+        <span class="legend-item" id="legend-marks" hidden><span class="dot mark"></span>定位标记（仅版心之外）</span>
       </div>
       <p class="rule-hint">
         折页方式：每张纸左右对折后骑马钉装订。正面左侧为大页码、右侧为小页码；

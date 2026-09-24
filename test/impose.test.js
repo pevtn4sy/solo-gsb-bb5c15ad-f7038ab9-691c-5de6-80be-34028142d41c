@@ -16,6 +16,13 @@ const {
   slotPlacement,
   imposePdf,
 } = require('../lib/impose');
+const {
+  PT_PER_MM,
+  SHEET_MARK_MARGIN_MM,
+  sheetMarkConfig,
+  outputSheetSize,
+  markSegments,
+} = require('../lib/marks');
 
 // ---------- 1. 页序算法单测 ----------
 function planToArray(plan) {
@@ -232,6 +239,54 @@ for (const rotation of [0, 90, 180, 270]) {
 
 console.log('✅ 混合尺寸适配单测通过（旋转规范化 / 统一面板 / 各角度槽位居中）');
 
+// ---------- 2b. 印张定位标记几何单测 ----------
+assert.strictEqual(SHEET_MARK_MARGIN_MM, 8);
+const markCfg = sheetMarkConfig();
+assert.ok(Math.abs(markCfg.marginPt - 8 * PT_PER_MM) < 1e-9);
+const markPanel = { width: 200, height: 300 };
+const markedSize = outputSheetSize(markPanel, markCfg);
+// 宽 = 2×面板 + 左右各 8mm；高 = 面板 + 上下各 8mm
+assert.ok(Math.abs(markedSize.width - (400 + 16 * PT_PER_MM)) < 1e-9);
+assert.ok(Math.abs(markedSize.height - (300 + 16 * PT_PER_MM)) < 1e-9);
+
+// 10 段线段（四角各 2 段 + 折线上下端各 1 段），且每段严格位于版心之外
+const segs = markSegments(markedSize.width, markedSize.height, markCfg);
+assert.strictEqual(segs.length, 10);
+const m = markCfg.marginPt;
+const trimL = m;
+const trimR = markedSize.width - m;
+const trimB = m;
+const trimT = markedSize.height - m;
+for (const s of segs) {
+  const xs = [s.x1, s.x2];
+  const ys = [s.y1, s.y2];
+  if (s.kind === 'crop-v') {
+    // 竖段：x 恰好为版心左/右边，y 全部在版心之外
+    assert.ok(Math.abs(xs[0] - trimL) < 1e-9 || Math.abs(xs[0] - trimR) < 1e-9, `竖段 x ${xs[0]}`);
+    assert.strictEqual(xs[0], xs[1]);
+    for (const y of ys) assert.ok(y < trimB - 1e-9 || y > trimT + 1e-9, `竖段 y ${y} 不应进入版心`);
+  } else if (s.kind === 'crop-h') {
+    // 横段：y 恰好为版心上/下边，x 全部在版心之外
+    assert.ok(Math.abs(ys[0] - trimB) < 1e-9 || Math.abs(ys[0] - trimT) < 1e-9, `横段 y ${ys[0]}`);
+    assert.strictEqual(ys[0], ys[1]);
+    for (const x of xs) assert.ok(x < trimL - 1e-9 || x > trimR + 1e-9, `横段 x ${x} 不应进入版心`);
+  } else {
+    // 折线定位线：x 为中央折痕，y 在空白区
+    assert.strictEqual(s.kind, 'fold-v');
+    assert.ok(Math.abs(xs[0] - markedSize.width / 2) < 1e-9);
+    for (const y of ys) assert.ok(y < trimB - 1e-9 || y > trimT + 1e-9, `折线 y ${y} 不应进入版心`);
+  }
+  // 标记不得超出印张边界
+  for (const x of xs) assert.ok(x >= 0 && x <= markedSize.width + 1e-9, `x 越界 ${x}`);
+  for (const y of ys) assert.ok(y >= 0 && y <= markedSize.height + 1e-9, `y 越界 ${y}`);
+}
+// 四角各一条竖段与一条横段
+assert.strictEqual(segs.filter((s) => s.kind === 'crop-v').length, 4);
+assert.strictEqual(segs.filter((s) => s.kind === 'crop-h').length, 4);
+assert.strictEqual(segs.filter((s) => s.kind === 'fold-v').length, 2);
+
+console.log('✅ 印张定位标记几何单测通过（8 mm 空白 / 四角裁切 + 折线定位 / 标记不进入版心）');
+
 // 读取输出页的内容流文本（Contents 可能是单条流或流数组，均为 flate 编码）
 function decodePageContent(doc, pageIndex) {
   const node = doc.getPage(pageIndex).node;
@@ -252,6 +307,17 @@ function parseCmOperators(content) {
     ops.push(m.slice(1, 7).map(Number));
   }
   return ops;
+}
+
+// 解析内容流中 pdf-lib drawLine 生成的线段：x1 y1 m / x2 y2 l（以 S 收尾）
+function parseLineSegments(content) {
+  const segs = [];
+  const re = /(-?[\d.eE+-]+)\s+(-?[\d.eE+-]+)\s+m\s+(-?[\d.eE+-]+)\s+(-?[\d.eE+-]+)\s+l\s+S/g;
+  let m;
+  while ((m = re.exec(content)) !== null) {
+    segs.push({ x1: +m[1], y1: +m[2], x2: +m[3], y2: +m[4] });
+  }
+  return segs;
 }
 
 // ---------- 3. 端到端：生成 10 页 PDF，拼版后校验 ----------
@@ -416,4 +482,79 @@ function parseCmOperators(content) {
       console.log(`     帖内第${s.sheet}张 正面 [${f(s.front.left)} | ${f(s.front.right)}]  背面 [${f(s.back.left)} | ${f(s.back.right)}]`);
     }
   }
+
+  // ---------- 6. 端到端：印张定位标记 ----------
+  const margin = 8 * (72 / 25.4); // 8 mm in pt
+
+  // 6.1 整册模式 + 标记：输出印张四周各增加 8 mm，页序不变
+  const { pdfBytes: markBytes, plan: markPlan } = await imposePdf(srcBytes, { sheetMarks: true });
+  const markOut = await PDFDocument.load(markBytes);
+  assert.strictEqual(markOut.getPageCount(), 6, '标记不改变纸张数');
+  assert.deepStrictEqual(markPlan.sheets, (await imposePdf(srcBytes)).plan.sheets, '页序应保持一致');
+  assert.strictEqual(markPlan.sheetMarks.enabled, true);
+  assert.strictEqual(markPlan.sheetMarks.marginMm, 8);
+  const expW = PAGE_W * 2 + margin * 2;
+  const expH = PAGE_H + margin * 2;
+  assert.ok(Math.abs(markPlan.outputSheet.width - expW) < 1e-6);
+  assert.ok(Math.abs(markPlan.outputSheet.height - expH) < 1e-6);
+  const markPage = markOut.getPage(0);
+  assert.ok(Math.abs(markPage.getWidth() - expW) < 0.01, `含标记纸宽 ${markPage.getWidth()}`);
+  assert.ok(Math.abs(markPage.getHeight() - expH) < 0.01, `含标记纸高 ${markPage.getHeight()}`);
+
+  // 每个输出页都恰好绘制 10 段标记线段，且与几何模块的期望坐标一致
+  const expectedSegs = markSegments(expW, expH, sheetMarkConfig());
+  for (let i = 0; i < markOut.getPageCount(); i += 1) {
+    const content = decodePageContent(markOut, i);
+    const lines = parseLineSegments(content);
+    assert.strictEqual(lines.length, 10, `第 ${i + 1} 页应含 10 段标记线`);
+    for (const exp of expectedSegs) {
+      const hit = lines.some((l) => Math.abs(l.x1 - exp.x1) < 0.01 && Math.abs(l.y1 - exp.y1) < 0.01
+        && Math.abs(l.x2 - exp.x2) < 0.01 && Math.abs(l.y2 - exp.y2) < 0.01);
+      assert.ok(hit, `第 ${i + 1} 页缺少标记段 (${exp.x1.toFixed(1)},${exp.y1.toFixed(1)})-(${exp.x2.toFixed(1)},${exp.y2.toFixed(1)})`);
+    }
+  }
+
+  // 源页整体平移一个空白宽度、不缩放：正面右半区首页的 cm 平移 x 增加 margin、y 增加 margin
+  const markFrontContent = decodePageContent(markOut, 0);
+  const markCms = parseCmOperators(markFrontContent);
+  // 无标记时首页位于右半区原点 (PAGE_W, 0)，启用后应为 (PAGE_W + margin, margin)
+  const identity = markCms.find((c) => c[0] === 1 && c[1] === 0 && c[2] === 0 && c[3] === 1
+    && Math.abs(c[4] - (PAGE_W + margin)) < 0.01 && Math.abs(c[5] - margin) < 0.01);
+  assert.ok(identity, `源页应平移到 (${PAGE_W + margin}, ${margin})，实际 cm: ${JSON.stringify(markCms)}`);
+
+  // 标记线段全部位于版心之外（版心范围 [margin, expW-margin] × [margin, expH-margin]）
+  for (const s of expectedSegs) {
+    const pts = [[s.x1, s.y1], [s.x2, s.y2]];
+    if (s.kind === 'crop-v') {
+      for (const [, y] of pts) assert.ok(y < margin - 0.01 || y > expH - margin + 0.01);
+    } else if (s.kind === 'crop-h') {
+      for (const [x] of pts) assert.ok(x < margin - 0.01 || x > expW - margin + 0.01);
+    } else {
+      for (const [, y] of pts) assert.ok(y < margin - 0.01 || y > expH - margin + 0.01);
+    }
+  }
+
+  // 6.2 未勾选时方案与输出尺寸完全保持原样（无 sheetMarks / outputSheet 字段）
+  const { plan: plainPlan } = await imposePdf(srcBytes);
+  assert.strictEqual(plainPlan.sheetMarks, undefined);
+  assert.strictEqual(plainPlan.outputSheet, undefined);
+
+  // 6.3 分册签帖 + 标记同样适用：每一页都含标记、尺寸一致、页序为签帖方案
+  const { pdfBytes: sigMarkBytes, plan: sigMarkPlan } = await imposePdf(sigSrcBytes, {
+    maxSheetsPerSignature: 2,
+    sheetMarks: true,
+  });
+  const sigMarkOut = await PDFDocument.load(sigMarkBytes);
+  assert.strictEqual(sigMarkOut.getPageCount(), 8);
+  assert.strictEqual(sigMarkPlan.signatureMode, true);
+  assert.strictEqual(sigMarkPlan.sheetMarks.enabled, true);
+  for (let i = 0; i < sigMarkOut.getPageCount(); i += 1) {
+    assert.ok(Math.abs(sigMarkOut.getPage(i).getWidth() - expW) < 0.01);
+    assert.ok(Math.abs(sigMarkOut.getPage(i).getHeight() - expH) < 0.01);
+    assert.strictEqual(parseLineSegments(decodePageContent(sigMarkOut, i)).length, 10);
+  }
+
+  fs.writeFileSync('/tmp/out-marks.pdf', markBytes);
+  console.log('✅ 端到端印张定位标记通过：四周各加 8 mm、每页 10 段标记（四角裁切 + 折线上下端），');
+  console.log('   标记仅位于版心之外、源页平移不缩放、页序不变；未勾选时尺寸/方案与旧版一致；签帖模式同样适用');
 })();

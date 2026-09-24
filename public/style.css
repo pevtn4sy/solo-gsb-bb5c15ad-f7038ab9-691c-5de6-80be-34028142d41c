@@ -585,6 +585,64 @@ main {
 .panel .pos.left { left: 8px; }
 .panel .pos.right { right: 8px; }
 .panel .blank-tag { font-size: clamp(12px, 2.5vw, 16px); font-weight: 500; }
+.dot.mark { background: #111827; border: 1px solid #111827; }
+
+/* 印张定位标记示意（仅示意，位置严格处于版心之外） */
+.spread.marked {
+  position: relative;
+  display: block;
+  background: #f1f4f8;
+}
+.spread.marked .panel {
+  position: absolute;
+  top: 8.5%;
+  bottom: 8.5%;
+  width: 48%;
+  z-index: 1;
+}
+.spread.marked .panel.left { left: 2%; border-top: 1.5px solid #475569; border-bottom: 1.5px solid #475569; border-left: 1.5px solid #475569; }
+.spread.marked .panel.right {
+  left: 50%;
+  border-top: 1.5px solid #475569;
+  border-bottom: 1.5px solid #475569;
+  border-right: 1.5px solid #475569;
+  border-left: 2px solid #334155;
+}
+.sheet-marks { position: absolute; inset: 0; pointer-events: none; z-index: 2; }
+.crop-corner { position: absolute; width: 10px; height: 10px; }
+.crop-corner::before,
+.crop-corner::after {
+  content: '';
+  position: absolute;
+  background: #111827;
+}
+/* 竖段 */
+.crop-corner::before { width: 1.5px; height: 10px; }
+/* 横段 */
+.crop-corner::after { height: 1.5px; width: 10px; }
+/* 四角各距版心边缘一小段间隙，标记全部落在空白区内 */
+.crop-corner.tl { top: 2%; left: 0.7%; }
+.crop-corner.tl::before { top: 0; left: 0; }
+.crop-corner.tl::after { top: 0; left: 0; }
+.crop-corner.tr { top: 2%; right: 0.7%; }
+.crop-corner.tr::before { top: 0; right: 0; }
+.crop-corner.tr::after { top: 0; right: 0; }
+.crop-corner.bl { bottom: 2%; left: 0.7%; }
+.crop-corner.bl::before { bottom: 0; left: 0; }
+.crop-corner.bl::after { bottom: 0; left: 0; }
+.crop-corner.br { bottom: 2%; right: 0.7%; }
+.crop-corner.br::before { bottom: 0; right: 0; }
+.crop-corner.br::after { bottom: 0; right: 0; }
+/* 中央折线上下端定位线 */
+.fold-tick {
+  position: absolute;
+  left: calc(50% - 0.75px);
+  width: 1.5px;
+  height: 11px;
+  background: #111827;
+}
+.fold-tick.top { top: 1%; }
+.fold-tick.bottom { bottom: 1%; }
 
 .site-footer {
   text-align: center;

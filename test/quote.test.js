@@ -194,6 +194,64 @@ assert.strictEqual(tie.selected.name, 'A3'); // 利用率 100% 胜出
 
 // ---------- 8. 结构稳定性（外部 JSON 消费字段） ----------
 
+// ---------- 9. 印张定位标记：按实际输出印张（含四周空白）判定容纳与利用率 ----------
+
+const MARGIN_PT = 8 * PT_PER_MM;
+// 与 planA4 相同的面板（A4 竖版），但启用定位标记：印张 = 420+16 × 297+16 = 436 × 313 mm
+const markedPlan = {
+  sheets: [{ sheet: 1 }, { sheet: 2 }],
+  sourceCount: 8, paddedCount: 0, totalCount: 8, blanks: 0,
+  panel: PANEL_A4,
+  sheetMarks: { enabled: true, marginMm: 8 },
+  outputSheet: {
+    width: PANEL_A4.width * 2 + MARGIN_PT * 2,
+    height: PANEL_A4.height + MARGIN_PT * 2,
+  },
+};
+const markedLayout = readLayout(markedPlan);
+assert.strictEqual(markedLayout.sheetMarks, true);
+assert.strictEqual(markedLayout.markMarginMm, 8);
+assert.ok(Math.abs(markedLayout.sheetWidthPt - (PANEL_A4.width * 2 + MARGIN_PT * 2)) < 1e-6);
+assert.ok(Math.abs(markedLayout.sheetHeightPt - (PANEL_A4.height + MARGIN_PT * 2)) < 1e-6);
+assert.ok(Math.abs(mm(markedLayout.sheetWidthPt) - 436) < 0.01);
+assert.ok(Math.abs(mm(markedLayout.sheetHeightPt) - 313) < 0.01);
+
+// A3（420×297）已无法容纳 436×313；需要 A2（424×594）
+const markedQuote = buildPaperQuote(markedPlan, [
+  { name: 'A3 铜版', widthMm: 420, heightMm: 297, pricePerSheet: 1, setupFee: 50 },
+  { name: 'A2 胶版', widthMm: 424, heightMm: 594, pricePerSheet: 2.2, setupFee: 80 },
+]);
+assert.strictEqual(markedQuote.feasible, true);
+assert.strictEqual(markedQuote.selected.name, 'A2 胶版');
+const markedA3 = markedQuote.options.find((o) => o.name === 'A3 铜版');
+assert.strictEqual(markedA3.fits, false);
+// 原向宽不足 16mm、高不足 16mm
+const markedA3AsIs = markedA3.reasons.find((r) => r.orientation === 'as_is');
+assert.ok(Math.abs(markedA3AsIs.shortageWidthMm - 16) < 0.05, `宽度不足 ${markedA3AsIs.shortageWidthMm}`);
+assert.ok(Math.abs(markedA3AsIs.shortageHeightMm - 16) < 0.05);
+// 利用率 = 实际印张面积 436×313 / 纸张面积 424×594
+const expectedMarkedUtil = (436 * 313) / (424 * 594);
+assert.ok(Math.abs(markedQuote.selected.utilization - expectedMarkedUtil) < 1e-3,
+  `利用率 ${markedQuote.selected.utilization} vs ${expectedMarkedUtil}`);
+// layout 记录标记信息与实际印张尺寸
+assert.strictEqual(markedQuote.layout.sheetMarks, true);
+assert.strictEqual(markedQuote.layout.markMarginMm, 8);
+assert.ok(Math.abs(markedQuote.layout.sheet.widthMm - 436) < 0.01);
+assert.ok(Math.abs(markedQuote.layout.sheet.heightMm - 313) < 0.01);
+// 面板尺寸不受标记影响
+assert.ok(Math.abs(markedQuote.layout.panel.widthMm - 210) < 0.01);
+
+// 旧方案（无 outputSheet / sheetMarks）：行为与旧版完全一致
+const legacyLayout = readLayout(planA4);
+assert.strictEqual(legacyLayout.sheetMarks, false);
+assert.strictEqual(legacyLayout.markMarginMm, null);
+assert.ok(Math.abs(legacyLayout.sheetWidthPt - PANEL_A4.width * 2) < 1e-9);
+assert.ok(Math.abs(legacyLayout.sheetHeightPt - PANEL_A4.height) < 1e-9);
+
+console.log('✅ 定位标记报价测试通过：按含 8 mm 空白的实际印张判定容纳与利用率，旧方案保持原样');
+
+// ---------- 10. 结构稳定性（外部 JSON 消费字段） ----------
+
 const json = JSON.parse(JSON.stringify(quote));
 assert.strictEqual(json.kind, 'paper-quote');
 assert.strictEqual(json.schemaVersion, 1);
